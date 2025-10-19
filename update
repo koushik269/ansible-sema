@@ -1,0 +1,8 @@
+---
+- name: Update APT package index
+  hosts: all
+  become: yes
+  tasks:
+    - name: Update apt package list
+      apt:
+        update_cache: yes
