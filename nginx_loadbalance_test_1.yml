@@ -50,6 +50,11 @@
     backend_servers: "{{ groups['all'] | list }}"
 
   tasks:
+    - name: Install curl for testing backend
+      apt:
+        name: curl
+        state: present
+
     - name: Create dynamic load balancer configuration
       copy:
         dest: /etc/nginx/sites-available/loadbalancer.conf
@@ -99,8 +104,9 @@
         state: restarted
 
 
-- name: Validate backend servers
+- name: Validate backend servers via curl
   hosts: "{{ groups['all'] | first }}"
+  become: yes
   gather_facts: no
 
   vars:
