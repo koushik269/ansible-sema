@@ -11,7 +11,7 @@
     - name: Update apt cache and upgrade packages
       apt:
         update_cache: yes
-        upgrade: dist
+       # upgrade: dist
 
     - name: Install latest NGINX
       apt:
