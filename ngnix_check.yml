@@ -1,0 +1,75 @@
+---
+- name: Test NGINX installation and cleanup
+  hosts: all
+  become: yes
+  gather_facts: yes
+
+  vars:
+    nginx_port: 80
+    check_url: "http://{{ ansible_host | default(inventory_hostname) }}"
+
+  tasks:
+    - name: Update apt cache
+      apt:
+        update_cache: yes
+      when: ansible_os_family == "Debian"
+
+    - name: Install NGINX
+      apt:
+        name: nginx
+        state: present
+      when: ansible_os_family == "Debian"
+
+    - name: Ensure NGINX service is running
+      service:
+        name: nginx
+        state: started
+        enabled: yes
+
+    - name: Wait for NGINX to be reachable on port {{ nginx_port }}
+      wait_for:
+        port: "{{ nginx_port }}"
+        host: "{{ ansible_host | default(inventory_hostname) }}"
+        timeout: 20
+        state: started
+
+    - name: Check if NGINX default page is reachable
+      uri:
+        url: "{{ check_url }}"
+        return_content: yes
+      register: nginx_page
+
+    - name: Verify NGINX default page content
+      assert:
+        that:
+          - "'Welcome to nginx!' in nginx_page.content"
+        fail_msg: "Nginx page not found or not responding correctly."
+        success_msg: "Nginx is working properly."
+
+    - name: Stop NGINX before removal
+      service:
+        name: nginx
+        state: stopped
+      ignore_errors: yes
+
+    - name: Remove NGINX and purge configuration
+      apt:
+        name: nginx
+        state: absent
+        purge: yes
+      when: ansible_os_family == "Debian"
+
+    - name: Autoremove unused dependencies
+      apt:
+        autoremove: yes
+        purge: yes
+      when: ansible_os_family == "Debian"
+
+    - name: Verify NGINX is uninstalled
+      shell: "dpkg -l | grep nginx || echo 'Nginx fully removed'"
+      register: verify_removal
+      changed_when: false
+
+    - name: Show verification result
+      debug:
+        msg: "{{ verify_removal.stdout }}"
