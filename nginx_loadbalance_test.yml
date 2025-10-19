@@ -1,0 +1,152 @@
+---
+- name: Install and configure NGINX on all servers
+  hosts: all
+  become: yes
+  gather_facts: yes
+
+  vars:
+    web_page_path: /var/www/html/index.html
+
+  tasks:
+    - name: Update apt cache
+      apt:
+        update_cache: yes
+
+    - name: Install NGINX
+      apt:
+        name: nginx
+        state: present
+
+    - name: Deploy simple webpage with hostname
+      copy:
+        dest: "{{ web_page_path }}"
+        content: |
+          <!DOCTYPE html>
+          <html>
+          <head>
+            <title>Welcome to {{ ansible_hostname }}</title>
+          </head>
+          <body>
+            <h1>Hello from {{ ansible_hostname }}</h1>
+            <p>Deployed automatically using Ansible & Semaphore.</p>
+          </body>
+          </html>
+        owner: www-data
+        group: www-data
+        mode: '0644'
+
+    - name: Ensure NGINX is started and enabled
+      service:
+        name: nginx
+        state: started
+        enabled: yes
+
+
+- name: Configure load balancer dynamically on first server
+  hosts: "{{ groups['all'] | first }}"
+  become: yes
+
+  vars:
+    backend_servers: "{{ groups['all'] | map('extract', hostvars, ['ansible_host']) | list }}"
+
+  tasks:
+    - name: Create load balancer config
+      copy:
+        dest: /etc/nginx/sites-available/loadbalancer.conf
+        content: |
+          upstream backend {
+          {% for srv in backend_servers %}
+              server {{ srv }};
+          {% endfor %}
+          }
+
+          server {
+              listen 80;
+              server_name _;
+
+              location / {
+                  proxy_pass http://backend;
+                  proxy_http_version 1.1;
+                  proxy_set_header Connection "";
+              }
+          }
+
+    - name: Enable load balancer site
+      file:
+        src: /etc/nginx/sites-available/loadbalancer.conf
+        dest: /etc/nginx/sites-enabled/loadbalancer.conf
+        state: link
+        force: yes
+
+    - name: Disable default site
+      file:
+        path: /etc/nginx/sites-enabled/default
+        state: absent
+      ignore_errors: yes
+
+    - name: Test NGINX configuration
+      command: nginx -t
+      register: nginx_test
+      changed_when: false
+
+    - name: Show NGINX test result
+      debug:
+        var: nginx_test.stdout_lines
+
+    - name: Restart NGINX
+      service:
+        name: nginx
+        state: restarted
+
+
+- name: Validate NGINX backend reachability
+  hosts: "{{ groups['all'] | first }}"
+  become: yes
+  gather_facts: no
+
+  vars:
+    backend_servers: "{{ groups['all'] | map('extract', hostvars, ['ansible_host']) | list }}"
+
+  tasks:
+    - name: Test backend responses
+      command: "curl -s http://{{ item }}"
+      register: backend_check
+      loop: "{{ backend_servers }}"
+      ignore_errors: yes
+
+    - name: Show backend responses
+      debug:
+        msg: "Response from {{ item.item }}: {{ item.stdout | regex_search('Hello from.*</h1>') }}"
+      loop: "{{ backend_check.results }}"
+
+    - name: Check if all backends responded
+      assert:
+        that:
+          - item.rc == 0
+        fail_msg: "Backend {{ item.item }} is unreachable!"
+        success_msg: "Backend {{ item.item }} responded OK"
+      loop: "{{ backend_check.results }}"
+
+
+- name: Test load balancer alternating behavior
+  hosts: localhost
+  gather_facts: no
+
+  vars:
+    lb_ip: "{{ hostvars[groups['all'][0]].ansible_host }}"
+
+  tasks:
+    - name: Make 6 HTTP requests to load balancer
+      shell: "for i in {1..6}; do curl -s http://{{ lb_ip }} | grep 'Hello from'; done"
+      register: lb_test
+
+    - name: Show alternating responses
+      debug:
+        var: lb_test.stdout_lines
+
+    - name: Verify load balancing alternates between at least two servers
+      assert:
+        that:
+          - lb_test.stdout_lines | unique | length > 1
+        fail_msg: "❌ Load balancing FAILED — only one server responded."
+        success_msg: "✅ Load balancing SUCCESS — requests alternated between servers."
