@@ -11,7 +11,7 @@
     - name: Update apt cache and upgrade packages
       apt:
         update_cache: yes
-#        upgrade: dist
+        upgrade: dist
 
     - name: Install latest NGINX
       apt:
@@ -64,6 +64,7 @@
           {% for srv in backend_servers %}
               server {{ srv }} max_fails=1 fail_timeout=5s;
           {% endfor %}
+              keepalive 0;  # Disable keepalive to force round-robin
           }
 
           server {
@@ -114,8 +115,8 @@
     backend_servers: "{{ groups['all'] | list }}"
 
   tasks:
-    - name: Test backend responses
-      command: "curl -s --connect-timeout 2 http://{{ item }}"
+    - name: Test backend responses with curl
+      command: "curl -s --connect-timeout 2 --no-keepalive http://{{ item }}"
       register: backend_check
       loop: "{{ backend_servers }}"
       ignore_errors: yes
@@ -144,8 +145,8 @@
   tasks:
     - name: Make multiple HTTP requests to load balancer
       shell: |
-        for i in {1..15}; do
-          curl -s --connect-timeout 2 http://{{ lb_ip }} | grep 'Hello from'
+        for i in {1..20}; do
+          curl -s --connect-timeout 2 --no-keepalive http://{{ lb_ip }} | grep 'Hello from'
           sleep 1
         done
       register: lb_test
